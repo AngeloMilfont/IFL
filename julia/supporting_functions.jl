@@ -218,7 +218,7 @@ function Ada_LASSO_intercept(x::Matrix{Float64}, y::Vector{Float64}, standardize
 
   # coef1 is theta
   coef1 = bic_adalasso.beta
-  coef0 = bic_adalasso.itcp  # Intercepto!!
+  coef0 = bic_adalasso.itcp  # Intercept
   
   return (coef = coef1, parameters = bic_adalasso.parameters, 
           betas = bic_adalasso.betas, df = bic_adalasso.df, 
@@ -231,22 +231,22 @@ end
 #
 # Adaptive LASSO with Outliers
 #
-function Ada_LASSO_intercept_outlier(x::Matrix{Float64}, y::Vector{Float64}, x2::Matrix{Float64}, gamma, standardize = false, intercept = false)
+function Ada_LASSO_intercept_outlier(x::Matrix{Float64}, y::Vector{Float64}, x2::Matrix{Float64}, standardize = false, intercept = false)
   #  Handles Outliers
   
   # First step: initial Ridge solution  => alpha = 0
   bic_ridge  = bic_glmnet(x, y, 0.0, standardize=standardize)
   
-  # gamma for Ridge regressions
+  # Ridge regression gamma
   gamma = 1
 
   w = 1 ./abs.(bic_ridge.beta) .^gamma  ## Using gamma = 1
-  w .= ifelse.(isinf.(w), 1e8, w)
+  w .= ifelse.(isinf.(w), 1e6, w)
 
-  # Find Outliers Weights
+  # Find Outlier Weights
   res = y - x * bic_ridge.beta
   wd =  1 ./abs.(res).^gamma
-  wd .= ifelse.(isinf.(wd), 1e8, wd)
+  wd .= ifelse.(isinf.(wd), 1e6, wd)
 
   w_extend = vcat(w, wd) 
   

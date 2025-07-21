@@ -1,5 +1,5 @@
 #
-#  IFL Algorithm
+#  IFL: Iterative Fused LASSO Algorithm
 #
 #  last update: AM 17/07/25
 #
@@ -14,7 +14,7 @@ include("supporting_functions.jl")
 # IFL
 #
 """
-IFL(y, x, treat_outlier = true, intercept = true)
+IFL(y, x, handle_outlier = true, intercept = true)
 
 Intercept = true => There is an intercept in x, then once the data is centralized, 
   it can be removed from the first column of X (zeros) 
@@ -38,7 +38,7 @@ Returns β_np_1 = v_beta_Par , β_n_p = m_beta_Par,                 # Solutions 
 Last review: 19 Jul 25
 
 """
-function IFL(y, x, treat_outlier = true, intercept = true)
+function IFL(y, x, handle_outlier = true, intercept = true)
   """
   
   """
@@ -76,10 +76,7 @@ function IFL(y, x, treat_outlier = true, intercept = true)
       end
   end
   
-  #
   # Setup Iteractive Fused LASSO 
-  #
-
   nbetas_In  = repeat([n], p)
   nbetas_In_Tot =sum(nbetas_In)
   nbetas_Out = repeat([0], p)
@@ -99,15 +96,11 @@ function IFL(y, x, treat_outlier = true, intercept = true)
     theta_hat_Est = Ada_LASSO_intercept(H, y, false, false)
     theta_hat = theta_hat_Est.coef
     
-    #
     # Gamma_d
-    #
     Gamma_d = abs.(theta_hat) .> 0
     #Gamma_d_Acc = cumsum(Gamma_d) 
       
     # Checking for 1s in free betas
-    #   Case when  d is larger than the number of diff values in p
-     
     aux1 = 0
     nbetas_In_Acc = cumsum(nbetas_In)
     for i in 1:p
@@ -116,9 +109,7 @@ function IFL(y, x, treat_outlier = true, intercept = true)
       aux1 = nbetas_In_Acc[i]
     end
       
-    #
     # Calculating qty of diff betas in the next iteration
-    #
     nbetas_Out = zeros(p)
     nbetas_Out[1] = sum(Gamma_d[1:nbetas_In_Acc[1]])
     for j in 2:p
@@ -128,10 +119,7 @@ function IFL(y, x, treat_outlier = true, intercept = true)
     end
     nbetas_Out_Tot = sum(nbetas_Out)
       
-    #
     # Updating Matrix M
-    #
-      
     if(nbetas_In_Tot != nbetas_Out_Tot)  
       g_d = cumsum(Gamma_d) 
       M = zeros(Int(nbetas_In_Tot), Int(nbetas_Out_Tot))
@@ -152,26 +140,26 @@ function IFL(y, x, treat_outlier = true, intercept = true)
       # Partial solution: solve problem on new dimensions 
       global HP = XX * W * LdP_i 
         
-      if (treat_outlier) 
+      if (handle_outlier) 
         # Handlig Outliers
         global HPo = hcat(HP, Matrix{Float64}(I, Int(n), Int(n)))
             
         # Ada LASSO solution with smallest BIC
-        theta_hatP_Est = Ada_LASSO_intercept_outlier(HP, y, HPo,false, false)
+        theta_hatP_Est = Ada_LASSO_intercept_outlier(HP, y, HPo, false, false)
           
-        # Solution part without outliers
+        # Solution without outliers
         global theta_hatP = theta_hatP_Est.coef
         global theta_hatP_itcp = theta_hatP_Est.itcp
         # BIC value
         global bic_value = theta_hatP_Est.bic[theta_hatP_Est.bick] 
 
-        # Solution part With Outliers
+        # Solution with Outliers
         global theta_hatPo = theta_hatP_Est.coefo
         global theta_hatPo_itcpo = theta_hatP_Est.itcpo
         # BIC value
         global bic_value_outliers = theta_hatP_Est.bico[theta_hatP_Est.bicko] 
           
-        global y_hato = HPo * theta_hatPo           # Without Intercept 
+        global y_hato = HPo * theta_hatPo           # With Intercept 
         global y_hat = HP * theta_hatP              # Without Intercept
           
         # No. of Outliers
@@ -197,8 +185,8 @@ function IFL(y, x, treat_outlier = true, intercept = true)
   m_beta_Par = reshape(v_beta_Par, n, p) 
 
   # β estimated with outliers
-  if(treat_outlier)                 
-    v_beta_Paro = W * LdP_i * theta_hatPo[1:end-n] # dim(theta_hatPo) is n times (np + n)
+  if(handle_outlier)                 
+    v_beta_Paro = W * LdP_i * theta_hatPo[1:end-n] # dim(theta_hatPo) is (np + n) times 1
     # Without Intercept
     m_beta_Paro = reshape(v_beta_Paro, n, p) 
   else # without outliers => always returns a value for v_beta and m_beta 
@@ -209,11 +197,10 @@ function IFL(y, x, treat_outlier = true, intercept = true)
   # Estimate Intercept
   β0_hat = mean(y_original) .- mean(XX, dims = 1) * v_beta_Par 
   
-  # Always consider the estimated intercept, since data was centralized. 
-  #   It need to be descentralized back.
+  # Always consider the estimated intercept. Since data was centralized, it needs to be decentralized back.
   y_original_hat = β0_hat .+ y_hat
   
-  if(treat_outlier)
+  if(handle_outlier)
     y_original_hat_woutl  = β0_hat .+ y_hato
   else
     y_original_hat_woutl =  y_original_hat
