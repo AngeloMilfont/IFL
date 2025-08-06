@@ -14,11 +14,14 @@ include("supporting_functions.jl")
 # IFL
 #
 """
-IFL(y, x, handle_outlier = true, intercept = true)
+IFL(y, x; handle_outliers = true, intercept = true, CD = false)
 
 Intercept = true => There is an intercept in x, then once the data is centralized, 
   it can be removed from the first column of X (zeros) 
 
+CD = false # uses glmnet
+CD = true  # uses Coordinate Descent
+  
 Returns β_np_1 = v_beta_Par , β_n_p = m_beta_Par,                 # Solutions without Outliers
         βo_np_1 = v_beta_Paro , βo_n_p = m_beta_Paro,             # Solutions with Outliers
         β0 = β0_hat,                                              # Estimated Intercept
@@ -38,9 +41,10 @@ Returns β_np_1 = v_beta_Par , β_n_p = m_beta_Par,                 # Solutions 
 Last review: 19 Jul 25
 
 """
-function IFL(y, x, handle_outlier = true, intercept = true)
+function IFL(y, x; handle_outliers = true, intercept = true,CD = false)
   """
-  
+  CD = false # uses glmnet
+  CD = true  # uses Coordinate Descent
   """
   
   # Store originals
@@ -93,7 +97,7 @@ function IFL(y, x, handle_outlier = true, intercept = true)
     H = XX * W * Ld_i
     # Ada LASSO solution with smallest BIC
     # Intercept is managed outside glmnet, therefore intercept here is always FALSE
-    theta_hat_Est = Ada_LASSO_intercept(H, y, false, false)
+    theta_hat_Est = Ada_LASSO_intercept(H, y, standardize = false, intercept = intercept, CD = CD)
     theta_hat = theta_hat_Est.coef
     
     # Gamma_d
@@ -140,12 +144,13 @@ function IFL(y, x, handle_outlier = true, intercept = true)
       # Partial solution: solve problem on new dimensions 
       global HP = XX * W * LdP_i 
         
-      if (handle_outlier) 
+      if (handle_outliers) 
         # Handlig Outliers
         global HPo = hcat(HP, Matrix{Float64}(I, Int(n), Int(n)))
             
         # Ada LASSO solution with smallest BIC
-        theta_hatP_Est = Ada_LASSO_intercept_outlier(HP, y, HPo, false, false)
+        theta_hatP_Est = Ada_LASSO_intercept_outliers(HP, y, HPo, 
+                            standardize = false, intercept = intercept, CD = CD)
           
         # Solution without outliers
         global theta_hatP = theta_hatP_Est.coef
@@ -166,7 +171,8 @@ function IFL(y, x, handle_outlier = true, intercept = true)
         ind_out = findall(pts -> pts > 0, theta_hatPo[(end-n+1):end])  
                   
       else
-        theta_hatP_Est = Ada_LASSO_intercept(HP, y, false, false)
+        theta_hatP_Est = Ada_LASSO_intercept(HP, y, standardize = false, intercept = intercept, CD = CD)
+         
         global theta_hatP = theta_hatP_Est.coef
         global theta_hatP_itcp = theta_hatP_Est.itcp
         # BIC value
@@ -185,7 +191,7 @@ function IFL(y, x, handle_outlier = true, intercept = true)
   m_beta_Par = reshape(v_beta_Par, n, p) 
 
   # β estimated with outliers
-  if(handle_outlier)                 
+  if(handle_outliers)                 
     v_beta_Paro = W * LdP_i * theta_hatPo[1:end-n] # dim(theta_hatPo) is (np + n) times 1
     # Without Intercept
     m_beta_Paro = reshape(v_beta_Paro, n, p) 
@@ -200,7 +206,7 @@ function IFL(y, x, handle_outlier = true, intercept = true)
   # Always consider the estimated intercept. Since data was centralized, it needs to be decentralized back.
   y_original_hat = β0_hat .+ y_hat
   
-  if(handle_outlier)
+  if(handle_outliers)
     y_original_hat_woutl  = β0_hat .+ y_hato
   else
     y_original_hat_woutl =  y_original_hat
