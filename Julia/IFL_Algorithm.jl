@@ -14,10 +14,13 @@ include("supporting_functions.jl")
 # IFL
 #
 """
-IFL(y, x; handle_outliers = true, intercept = true, CD = false)
+IFL(y, x; handle_outliers = true, assume_intercept = false, CD = false)
 
-Intercept = true => There is an intercept in x, then once the data is centralized, 
-  it can be removed from the first column of X (zeros) 
+Assume_Intercept = true => The data was created with the first column of x = 1s. For simulated data only.
+  Then, once the data is centralized, it becomes a column of zeros, and  it can be removed 
+  from X. Thus ncols(X) := ncols(x) - 1  
+
+Data is centralized inside IFL, so the intercept is calculated outside the solution engine.
 
 CD = false # uses glmnet
 CD = true  # uses Coordinate Descent
@@ -38,15 +41,12 @@ Returns β_np_1 = v_beta_Par , β_n_p = m_beta_Par,                 # Solutions 
         ind_out = ind_out,                                        # list of outlier in y  
         IFL_t0 = IFL_t0                                           # time to converge
 
-Last review: 19 Jul 25
+Last review: 08 Aug 25
 
 """
-function IFL(y, x; handle_outliers = true, intercept = true,CD = false)
+function IFL(y, x; handle_outliers = true, assume_intercept = false ,CD = false)
   """
-  CD = false # uses glmnet
-  CD = true  # uses Coordinate Descent
   """
-  
   # Store originals
   x_original = x
   y_original = y
@@ -54,22 +54,23 @@ function IFL(y, x; handle_outliers = true, intercept = true,CD = false)
   # Always center the data
   mean_x = mean(x_original, dims=1)
   mean_y = mean(y_original)
-  β0 = mean_y
-  y = y_original .- mean_y
+  # Removes the intercept
+  y = y_original .- mean_y 
   x = x_original .- mean_x
 
-  # No need to process intercept column that equals 0!
-  if(intercept) 
-      x = x[:,2:end]  
+  # If assume_intercept is set to true, 
+  #   then there is no need to process its column that equals 0!
+  if(assume_intercept) 
+      x = x[:,2:end]  # matrix dimension is reduced: p := p-1
   end
 
   ind_out=[]
   
-  ########################################################
+  ####################################################################
   # Problem Dimensions
   n = length(y) 
-  p = size(x)[2]
-  ########################################################
+  p = size(x)[2] # When Intercept is assumed p has already turned to p-1
+  ####################################################################
   
   global XX = Matrix{Float64}(undef, 0, 0)  # Alterei de Int para Float64!!! 27/05/25
   for i in 1:p
@@ -90,14 +91,15 @@ function IFL(y, x; handle_outliers = true, intercept = true,CD = false)
 
   # Main loop
   IFL_t0 = @elapsed begin 
+    
     Ld = L_Matrix(1, Int.(nbetas_In))
     Ld_i = Inverse_L(Int.(nbetas_In))
     
     # Update model
     H = XX * W * Ld_i
     # Ada LASSO solution with smallest BIC
-    # Intercept is managed outside glmnet, therefore intercept here is always FALSE
-    theta_hat_Est = Ada_LASSO_intercept(H, y, standardize = false, intercept = intercept, CD = CD)
+    # Intercept is being managed outside glmnet, therefore intercept here is always FALSE
+    theta_hat_Est = Ada_LASSO_intercept(H, y, standardize = false, intercept = false, CD = CD)
     theta_hat = theta_hat_Est.coef
     
     # Gamma_d
@@ -139,6 +141,7 @@ function IFL(y, x; handle_outliers = true, intercept = true,CD = false)
       W  =  W * M
       nbetas_In = nbetas_Out
       nbetas_In_Tot = sum(nbetas_In)
+      
       LdP = L_Matrix(1, Int.(nbetas_In))
       global LdP_i = Inverse_L(Int.(nbetas_In))
       # Partial solution: solve problem on new dimensions 
@@ -149,8 +152,9 @@ function IFL(y, x; handle_outliers = true, intercept = true,CD = false)
         global HPo = hcat(HP, Matrix{Float64}(I, Int(n), Int(n)))
             
         # Ada LASSO solution with smallest BIC
+        # Intercept is being managed outside glmnet, therefore intercept here is always FALSE
         theta_hatP_Est = Ada_LASSO_intercept_outliers(HP, y, HPo, 
-                            standardize = false, intercept = intercept, CD = CD)
+                            standardize = false, intercept = false, CD = CD)
           
         # Solution without outliers
         global theta_hatP = theta_hatP_Est.coef
@@ -160,21 +164,21 @@ function IFL(y, x; handle_outliers = true, intercept = true,CD = false)
 
         # Solution with Outliers
         global theta_hatPo = theta_hatP_Est.coefo
-        global theta_hatPo_itcpo = theta_hatP_Est.itcpo
+        #global theta_hatPo_itcpo = theta_hatP_Est.itcpo
         # BIC value
         global bic_value_outliers = theta_hatP_Est.bico[theta_hatP_Est.bicko] 
           
-        global y_hato = HPo * theta_hatPo           # With Intercept 
-        global y_hat = HP * theta_hatP              # Without Intercept
+        global y_hato = HPo * theta_hatPo           # Without Intercept 
+        global y_hat  = HP * theta_hatP              # Without Intercept
           
         # No. of Outliers
         ind_out = findall(pts -> pts > 0, theta_hatPo[(end-n+1):end])  
                   
       else
-        theta_hatP_Est = Ada_LASSO_intercept(HP, y, standardize = false, intercept = intercept, CD = CD)
+        theta_hatP_Est = Ada_LASSO_intercept(HP, y, standardize = false, intercept = false, CD = CD)
          
         global theta_hatP = theta_hatP_Est.coef
-        global theta_hatP_itcp = theta_hatP_Est.itcp
+        #global theta_hatP_itcp = theta_hatP_Est.itcp
         # BIC value
         global bic_value = theta_hatP_Est.bic[theta_hatP_Est.bick] 
         global bic_value_outliers = nothing 
@@ -187,7 +191,7 @@ function IFL(y, x; handle_outliers = true, intercept = true,CD = false)
   end  # Time
 
   # β estimated without outliers
-  v_beta_Par = W * LdP_i * theta_hatP  # Without Intercept
+  v_beta_Par = W * LdP_i * theta_hatP     # Without Intercept
   m_beta_Par = reshape(v_beta_Par, n, p) 
 
   # β estimated with outliers
@@ -199,7 +203,7 @@ function IFL(y, x; handle_outliers = true, intercept = true,CD = false)
     v_beta_Paro = v_beta_Par
     m_beta_Paro = m_beta_Par 
   end
-      
+    
   # Estimate Intercept
   β0_hat = mean(y_original) .- mean(XX, dims = 1) * v_beta_Par 
   
@@ -251,6 +255,14 @@ function IFL(y, x; handle_outliers = true, intercept = true,CD = false)
     end
   end
 
+  # Incorporate the intercept in the solution, if it is assumed.
+  if (assume_intercept)
+    m_beta_Par = hcat(fill(mean_x[1], R*ndd),m_beta_Par) 
+    v_beta_Par = vec(m_beta_Par)
+    m_beta_Paro = hcat(fill(mean_x[1], R*ndd),m_beta_Paro) 
+    v_beta_Paro = vec(m_beta_Paro)
+  end
+  
   return (β_np_1 = v_beta_Par , β_n_p = m_beta_Par,
           βo_np_1 = v_beta_Paro , βo_n_p = m_beta_Paro,
           β0 = β0_hat, 
