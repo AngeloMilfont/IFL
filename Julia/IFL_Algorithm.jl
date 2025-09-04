@@ -1,7 +1,7 @@
 #
 #  IFL: Iterative Fused LASSO Algorithm
 #
-#  last update: AM 17/07/25
+#  last update: AM 12/08/25
 #
 
 using LinearAlgebra
@@ -44,9 +44,10 @@ Returns β_np_1 = v_beta_Par , β_n_p = m_beta_Par,                 # Solutions 
 Last review: 08 Aug 25
 
 """
-function IFL(y, x; handle_outliers = true, assume_intercept = false ,CD = false)
+function IFL(y, x; handle_outliers = true, assume_intercept = false, CD = false)
   """
   """
+
   # Store originals
   x_original = x
   y_original = y
@@ -71,7 +72,13 @@ function IFL(y, x; handle_outliers = true, assume_intercept = false ,CD = false)
   n = length(y) 
   p = size(x)[2] # When Intercept is assumed p has already turned to p-1
   ####################################################################
-  
+    
+  # Setup Iteractive Fused LASSO 
+  nbetas_In  = repeat([n], p)
+  nbetas_In_Tot =sum(nbetas_In)
+  nbetas_Out = repeat([0], p)
+  nbetas_Out_Tot = sum(nbetas_Out)
+
   global XX = Matrix{Float64}(undef, 0, 0)  # Alterei de Int para Float64!!! 27/05/25
   for i in 1:p
       if (size(XX, 1) == 0)
@@ -80,26 +87,22 @@ function IFL(y, x; handle_outliers = true, assume_intercept = false ,CD = false)
           XX = hcat(XX, Diagonal(x[:, i]))  # Horizontally concatenate diagonal matrices
       end
   end
-  
-  # Setup Iteractive Fused LASSO 
-  nbetas_In  = repeat([n], p)
-  nbetas_In_Tot =sum(nbetas_In)
-  nbetas_Out = repeat([0], p)
-  nbetas_Out_Tot = sum(nbetas_Out)
-
-  W = I(n*p)
 
   # Main loop
   IFL_t0 = @elapsed begin 
     
-    Ld = L_Matrix(1, Int.(nbetas_In))
-    Ld_i = Inverse_L(Int.(nbetas_In))
-    
-    # Update model
-    H = XX * W * Ld_i
+    time_H = @elapsed begin
+      Hs = build_H(x)
+    end
+    println("Step 1, Build H: ", time_H)
+    H = Matrix(Hs)         
+
     # Ada LASSO solution with smallest BIC
     # Intercept is being managed outside glmnet, therefore intercept here is always FALSE
-    theta_hat_Est = Ada_LASSO_intercept(H, y, standardize = false, intercept = false, CD = CD)
+    time_AdaS1 = @elapsed begin
+        theta_hat_Est = Ada_LASSO_intercept(H, y, standardize = false, intercept = false, CD = CD)
+    end 
+    println("Step 1, Ada Step1: ", time_AdaS1)
     theta_hat = theta_hat_Est.coef
     
     # Gamma_d
@@ -129,23 +132,25 @@ function IFL(y, x; handle_outliers = true, assume_intercept = false ,CD = false)
     if(nbetas_In_Tot != nbetas_Out_Tot)  
       g_d = cumsum(Gamma_d) 
       M = zeros(Int(nbetas_In_Tot), Int(nbetas_Out_Tot))
-      for i in 1:nbetas_In_Tot
-        if(Gamma_d[i] != 0)
-          M[i, g_d[i]] = 1
-        else
-          M[i, g_d[i-1]] = 1
+
+      time_M = @elapsed begin   
+        for i in 1:nbetas_In_Tot
+          if(Gamma_d[i] != 0)
+            M[i, g_d[i]] = 1
+          else
+            M[i, g_d[i-1]] = 1
+          end
         end
       end
-              
-      # Update W
-      W  =  W * M
+      println("Step 2, matrix M: ", time_M)
+        
+      # Update W = M
       nbetas_In = nbetas_Out
       nbetas_In_Tot = sum(nbetas_In)
       
-      LdP = L_Matrix(1, Int.(nbetas_In))
       global LdP_i = Inverse_L(Int.(nbetas_In))
       # Partial solution: solve problem on new dimensions 
-      global HP = XX * W * LdP_i 
+      global HP = XX * M * LdP_i 
         
       if (handle_outliers) 
         # Handlig Outliers
@@ -153,9 +158,12 @@ function IFL(y, x; handle_outliers = true, assume_intercept = false ,CD = false)
             
         # Ada LASSO solution with smallest BIC
         # Intercept is being managed outside glmnet, therefore intercept here is always FALSE
-        theta_hatP_Est = Ada_LASSO_intercept_outliers(HP, y, HPo, 
+        time_AdaS3wO = @elapsed begin   
+           theta_hatP_Est = Ada_LASSO_intercept_outliers(HP, y, HPo, 
                             standardize = false, intercept = false, CD = CD)
-          
+        end
+        println("Step 3, AdaLASSO with Outliers: ", time_AdaS3wO)
+      
         # Solution without outliers
         global theta_hatP = theta_hatP_Est.coef
         global theta_hatP_itcp = theta_hatP_Est.itcp
@@ -175,8 +183,11 @@ function IFL(y, x; handle_outliers = true, assume_intercept = false ,CD = false)
         ind_out = findall(pts -> pts > 0, theta_hatPo[(end-n+1):end])  
                   
       else
-        theta_hatP_Est = Ada_LASSO_intercept(HP, y, standardize = false, intercept = false, CD = CD)
-         
+        time_AdaS3woO = @elapsed begin   
+          theta_hatP_Est = Ada_LASSO_intercept(HP, y, standardize = false, intercept = false, CD = CD)
+        end
+        println("Step 3, AdaLASSO without Outliers: ", time_AdaS3woO)
+      
         global theta_hatP = theta_hatP_Est.coef
         #global theta_hatP_itcp = theta_hatP_Est.itcp
         # BIC value
@@ -191,12 +202,12 @@ function IFL(y, x; handle_outliers = true, assume_intercept = false ,CD = false)
   end  # Time
 
   # β estimated without outliers
-  v_beta_Par = W * LdP_i * theta_hatP     # Without Intercept
+  v_beta_Par = M * LdP_i * theta_hatP     # Without Intercept
   m_beta_Par = reshape(v_beta_Par, n, p) 
 
   # β estimated with outliers
   if(handle_outliers)                 
-    v_beta_Paro = W * LdP_i * theta_hatPo[1:end-n] # dim(theta_hatPo) is (np + n) times 1
+    v_beta_Paro = M * LdP_i * theta_hatPo[1:end-n] # dim(theta_hatPo) is (np + n) times 1
     # Without Intercept
     m_beta_Paro = reshape(v_beta_Paro, n, p) 
   else # without outliers => always returns a value for v_beta and m_beta 
@@ -205,17 +216,37 @@ function IFL(y, x; handle_outliers = true, assume_intercept = false ,CD = false)
   end
     
   # Estimate Intercept
-  β0_hat = mean(y_original) .- mean(XX, dims = 1) * v_beta_Par 
+  #β0_hat = mean(y_original) .- mean(XX, dims = 1) * v_beta_Par 
+  β0_hat = mean_y .- mean_x * m_beta_Par[end,:] # valid only for the last intercept.
+  β0_hato = mean_y .- mean_x * m_beta_Paro[end,:] # valid only for the last intercept.
   
-  # Always consider the estimated intercept. Since data was centralized, it needs to be decentralized back.
-  y_original_hat = β0_hat .+ y_hat
+    
+  # Since data was centralized, it needs to be decentralized back.
+  y_original_hat = y_hat .+ mean_y
   
   if(handle_outliers)
-    y_original_hat_woutl  = β0_hat .+ y_hato
+    y_original_hat_woutl  = y_hato .+ mean_y
   else
     y_original_hat_woutl =  y_original_hat
   end
-  
+
+  # Last Observation Check
+  #println("Last observation (Centered) is                                :", y[end])
+  #println()
+  #println("Last observation (Centered) estimation WO Out         is      :", y_hat[end])
+  #println("Last observation (Centered) estimation WO Out recalculated is :", x[end,:]' * m_beta_Par[end,:])
+  ## It needs to take into consideration all dummy variables with Xout = HPo[end,:] #* theta_hatPo
+  #println("Last observation (Centered) estimation Wt Out         is      :", y_hato[end])
+  #println("Last observation (Centered) estimation Wt Out recalculated is :", HPo[end,:]' * theta_hatPo)
+  #println()
+  ## Check 
+  #println("Last observation (rescaled) is                                :", y_original[end])
+  #println("Last observation (rescaled) estimation WO Out         is      :", y_original_hat[end])
+  #println("Last observation (rescaled) estimation WO Out recalculated is :", β0_hat[1] + x_original[end,:]' * m_beta_Par[end,:])
+  #println("Last observation (rescaled) estimation Wt Out         is      :", y_original_hat_woutl[end])
+  #println("Last observation (rescaled) estimation Wt Out recalculated is :", β0_hato[1] + x_original[end,:]' * m_beta_Paro[end,:])
+  ## Last Observation Check
+    
   # RMSE In Sample
   RMSE_inS  = sqrt(1/length(y)*sum((y.-y_hat).^2))
   RMSE_inSo = sqrt(1/length(y)*sum((y.-y_hato).^2))
@@ -265,7 +296,7 @@ function IFL(y, x; handle_outliers = true, assume_intercept = false ,CD = false)
   
   return (β_np_1 = v_beta_Par , β_n_p = m_beta_Par,
           βo_np_1 = v_beta_Paro , βo_n_p = m_beta_Paro,
-          β0 = β0_hat, 
+          β0 = β0_hat, β0o = β0_hato, 
           y_hat =  y_original_hat ,  y_hato = y_original_hat_woutl,
           mean_x  = mean_x , mean_y  = mean_y, 
           bic_value = bic_value, bic_value_outliers = bic_value_outliers,            
