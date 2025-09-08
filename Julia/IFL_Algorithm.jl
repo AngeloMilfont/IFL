@@ -14,9 +14,9 @@ include("supporting_functions.jl")
 # IFL
 #
 """
-IFL(y, x; handle_outliers = true, assume_intercept = false, CD = false)
+IFL(y, x; handle_outliers = true, force_intercept = false, CD = false)
 
-Assume_Intercept = true => The data was created with the first column of x = 1s. For simulated data only.
+force_intercept = true => for simulated data only. The data was created with a first column of x = 1s.
   Then, once the data is centralized, it becomes a column of zeros, and  it can be removed 
   from X. Thus ncols(X) := ncols(x) - 1  
 
@@ -44,10 +44,10 @@ Returns β_np_1 = v_beta_Par , β_n_p = m_beta_Par,                 # Solutions 
 Last review: 08 Aug 25
 
 """
-function IFL(y, x; handle_outliers = true, assume_intercept = false, CD = false)
+function IFL(y, x; handle_outliers = true, force_intercept = false, CD = false, verbose = false)
   """
   """
-
+  
   # Store originals
   x_original = x
   y_original = y
@@ -61,7 +61,7 @@ function IFL(y, x; handle_outliers = true, assume_intercept = false, CD = false)
 
   # If assume_intercept is set to true, 
   #   then there is no need to process its column that equals 0!
-  if(assume_intercept) 
+  if(force_intercept) 
       x = x[:,2:end]  # matrix dimension is reduced: p := p-1
   end
 
@@ -94,7 +94,10 @@ function IFL(y, x; handle_outliers = true, assume_intercept = false, CD = false)
     time_H = @elapsed begin
       Hs = build_H(x)
     end
-    println("Step 1, Build H: ", time_H)
+    if(verbose)
+      println("Step 1, Build H: ", time_H)
+    end 
+    
     H = Matrix(Hs)         
 
     # Ada LASSO solution with smallest BIC
@@ -102,7 +105,9 @@ function IFL(y, x; handle_outliers = true, assume_intercept = false, CD = false)
     time_AdaS1 = @elapsed begin
         theta_hat_Est = Ada_LASSO_intercept(H, y, standardize = false, intercept = false, CD = CD)
     end 
-    println("Step 1, Ada Step1: ", time_AdaS1)
+    if(verbose)
+      println("Step 1, Ada Step1: ", time_AdaS1)
+    end 
     theta_hat = theta_hat_Est.coef
     
     # Gamma_d
@@ -142,8 +147,10 @@ function IFL(y, x; handle_outliers = true, assume_intercept = false, CD = false)
           end
         end
       end
-      println("Step 2, matrix M: ", time_M)
-        
+      if(verbose)
+        println("Step 2, matrix M: ", time_M)
+      end
+
       # Update W = M
       nbetas_In = nbetas_Out
       nbetas_In_Tot = sum(nbetas_In)
@@ -162,8 +169,10 @@ function IFL(y, x; handle_outliers = true, assume_intercept = false, CD = false)
            theta_hatP_Est = Ada_LASSO_intercept_outliers(HP, y, HPo, 
                             standardize = false, intercept = false, CD = CD)
         end
-        println("Step 3, AdaLASSO with Outliers: ", time_AdaS3wO)
-      
+        if(verbose)
+          println("Step 3, AdaLASSO with Outliers: ", time_AdaS3wO)
+        end
+        
         # Solution without outliers
         global theta_hatP = theta_hatP_Est.coef
         global theta_hatP_itcp = theta_hatP_Est.itcp
@@ -186,8 +195,10 @@ function IFL(y, x; handle_outliers = true, assume_intercept = false, CD = false)
         time_AdaS3woO = @elapsed begin   
           theta_hatP_Est = Ada_LASSO_intercept(HP, y, standardize = false, intercept = false, CD = CD)
         end
-        println("Step 3, AdaLASSO without Outliers: ", time_AdaS3woO)
-      
+        if(verbose)
+          println("Step 3, AdaLASSO without Outliers: ", time_AdaS3woO)
+        end
+        
         global theta_hatP = theta_hatP_Est.coef
         #global theta_hatP_itcp = theta_hatP_Est.itcp
         # BIC value
@@ -216,10 +227,13 @@ function IFL(y, x; handle_outliers = true, assume_intercept = false, CD = false)
   end
     
   # Estimate Intercept
-  #β0_hat = mean(y_original) .- mean(XX, dims = 1) * v_beta_Par 
-  β0_hat = mean_y .- mean_x * m_beta_Par[end,:] # valid only for the last intercept.
-  β0_hato = mean_y .- mean_x * m_beta_Paro[end,:] # valid only for the last intercept.
-  
+  if(force_intercept)
+    β0_hat = mean_y .- mean_x   * vcat(0, m_beta_Par[end,:]) # valid only for the last intercept.
+    β0_hato = mean_y .- mean_x  * vcat(0, m_beta_Paro[end,:]) # valid only for the last intercept.
+  else
+    β0_hat = mean_y .- mean_x * m_beta_Par[end,:] # valid only for the last intercept.
+    β0_hato = mean_y .- mean_x * m_beta_Paro[end,:] # valid only for the last intercept.
+  end
     
   # Since data was centralized, it needs to be decentralized back.
   y_original_hat = y_hat .+ mean_y
@@ -287,10 +301,10 @@ function IFL(y, x; handle_outliers = true, assume_intercept = false, CD = false)
   end
 
   # Incorporate the intercept in the solution, if it is assumed.
-  if (assume_intercept)
-    m_beta_Par = hcat(fill(mean_x[1], R*ndd),m_beta_Par) 
+  if (force_intercept)
+    m_beta_Par = hcat(fill(mean_x[1], n),m_beta_Par) 
     v_beta_Par = vec(m_beta_Par)
-    m_beta_Paro = hcat(fill(mean_x[1], R*ndd),m_beta_Paro) 
+    m_beta_Paro = hcat(fill(mean_x[1], n),m_beta_Paro) 
     v_beta_Paro = vec(m_beta_Paro)
   end
   
