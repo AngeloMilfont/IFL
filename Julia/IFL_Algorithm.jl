@@ -1,7 +1,7 @@
 #
 #  IFL: Iterative Fused LASSO Algorithm
 #
-#  last update: AM 12/08/25
+#  last update: AM 16/10/25
 #
 
 using LinearAlgebra
@@ -14,23 +14,18 @@ include("supporting_functions.jl")
 # IFL
 #
 """
-IFL(y, x; handle_outliers = true, force_intercept = false, CD = false)
+IFL(y, x; handle_outliers = true, intercept = false, CD = false, verbose = false)
 
-force_intercept = true => for simulated data only. The data was created with a first column of x = 1s.
-  Then, once the data is centralized, it becomes a column of zeros, and  it can be removed 
-  from X. Thus ncols(X) := ncols(x) - 1  
-
-Data is centralized inside IFL, so the intercept is calculated outside the solution engine.
+Since IFL considers a dynamic model, data should be standardized OUTSIDE IFL.
 
 CD = false # uses glmnet
 CD = true  # uses Coordinate Descent
   
 Returns β_np_1 = v_beta_Par , β_n_p = m_beta_Par,                 # Solutions without Outliers
         βo_np_1 = v_beta_Paro , βo_n_p = m_beta_Paro,             # Solutions with Outliers
-        β0 = β0_hat,                                              # Estimated Intercept
+        β0 = β0_hat, β0_hato = β0_hato,                           # Estimated Intercept
         y_hat =  y_original_hat ,                                 # Insample Estimators without Outliers
         y_hato = y_original_hat_woutl,                            # Insample Estimators with Outliers
-        mean_x  = mean_x , mean_y  = mean_y,                      # column-wise mean of X and mean of y
         bic_value = bic_value,                                    # BIC value model without outliers
         bic_value_outliers = bic_value_outliers,                  # BIC value model with outliers
         chosen_var = chosen_variables,                            # List of selected columns in X
@@ -41,38 +36,37 @@ Returns β_np_1 = v_beta_Par , β_n_p = m_beta_Par,                 # Solutions 
         ind_out = ind_out,                                        # list of outlier in y  
         IFL_t0 = IFL_t0                                           # time to converge
 
-Last review: 08 Aug 25
+Last review: 16 Oct 25
 
 """
-function IFL(y, x; handle_outliers = true, force_intercept = false, CD = false, verbose = false)
+function IFL(y, x; handle_outliers = true, intercept = false, CD = false, verbose = false)
   """
-  """
+  """ 
   
   # Store originals
   x_original = x
   y_original = y
 
-  # Always center the data
+  #
   mean_x = mean(x_original, dims=1)
   mean_y = mean(y_original)
-  # Removes the intercept
-  y = y_original .- mean_y 
-  x = x_original .- mean_x
 
-  # If assume_intercept is set to true, 
-  #   then there is no need to process its column that equals 0!
-  if(force_intercept) 
-      x = x[:,2:end]  # matrix dimension is reduced: p := p-1
+  xc = x .- mean_x
+  yc = y.- mean_y
+    
+  # Create a DLRM Intercept 
+  if (intercept) 
+    xc = hcat(ones(size(xc)[1]), xc)
   end
-
+    
   ind_out=[]
-  
+
   ####################################################################
   # Problem Dimensions
   n = length(y) 
-  p = size(x)[2] # When Intercept is assumed p has already turned to p-1
+  p = size(xc)[2] # When Intercept is assumed p has already turned to p-1
   ####################################################################
-    
+  
   # Setup Iteractive Fused LASSO 
   nbetas_In  = repeat([n], p)
   nbetas_In_Tot =sum(nbetas_In)
@@ -82,9 +76,9 @@ function IFL(y, x; handle_outliers = true, force_intercept = false, CD = false, 
   global XX = Matrix{Float64}(undef, 0, 0)  # Alterei de Int para Float64!!! 27/05/25
   for i in 1:p
       if (size(XX, 1) == 0)
-          XX = Diagonal(x[:, i])  # Initialize with the first diagonal matrix
+          XX = Diagonal(xc[:, i])  # Initialize with the first diagonal matrix
       else
-          XX = hcat(XX, Diagonal(x[:, i]))  # Horizontally concatenate diagonal matrices
+          XX = hcat(XX, Diagonal(xc[:, i]))  # Horizontally concatenate diagonal matrices
       end
   end
 
@@ -92,7 +86,7 @@ function IFL(y, x; handle_outliers = true, force_intercept = false, CD = false, 
   IFL_t0 = @elapsed begin 
     
     time_H = @elapsed begin
-      Hs = build_H(x)
+      Hs = build_H(xc)
     end
     if(verbose)
       println("Step 1, Build H: ", time_H)
@@ -101,9 +95,11 @@ function IFL(y, x; handle_outliers = true, force_intercept = false, CD = false, 
     H = Matrix(Hs)         
 
     # Ada LASSO solution with smallest BIC
-    # Intercept is being managed outside glmnet, therefore intercept here is always FALSE
+    # Intercept is being managed outside glmnet. 
+    # Since its a Dynamic Linear Regression, the intercept is time variant.
+    # GLMNet consider the intercept only for obs #1, therefore intercept here is always FALSE.
     time_AdaS1 = @elapsed begin
-        theta_hat_Est = Ada_LASSO_intercept(H, y, standardize = false, intercept = false, CD = CD)
+      theta_hat_Est = Ada_LASSO_intercept(H, yc, standardize = false, intercept = false, CD = CD) 
     end 
     if(verbose)
       println("Step 1, Ada Step1: ", time_AdaS1)
@@ -166,8 +162,7 @@ function IFL(y, x; handle_outliers = true, force_intercept = false, CD = false, 
         # Ada LASSO solution with smallest BIC
         # Intercept is being managed outside glmnet, therefore intercept here is always FALSE
         time_AdaS3wO = @elapsed begin   
-           theta_hatP_Est = Ada_LASSO_intercept_outliers(HP, y, HPo, 
-                            standardize = false, intercept = false, CD = CD)
+          theta_hatP_Est = Ada_LASSO_intercept_outliers(HP, yc, HPo, standardize = false, intercept = false, CD = CD) 
         end
         if(verbose)
           println("Step 3, AdaLASSO with Outliers: ", time_AdaS3wO)
@@ -186,14 +181,14 @@ function IFL(y, x; handle_outliers = true, force_intercept = false, CD = false, 
         global bic_value_outliers = theta_hatP_Est.bico[theta_hatP_Est.bicko] 
           
         global y_hato = HPo * theta_hatPo           # Without Intercept 
-        global y_hat  = HP * theta_hatP              # Without Intercept
+        global y_hat  = HP * theta_hatP             # Without Intercept
           
         # No. of Outliers
-        ind_out = findall(pts -> pts > 0, theta_hatPo[(end-n+1):end])  
+        ind_out = findall(pts -> pts != 0, theta_hatPo[(end-n+1):end])  
                   
       else
-        time_AdaS3woO = @elapsed begin   
-          theta_hatP_Est = Ada_LASSO_intercept(HP, y, standardize = false, intercept = false, CD = CD)
+        time_AdaS3woO = @elapsed begin
+          theta_hatP_Est = Ada_LASSO_intercept(HP, yc, standardize = false, intercept = false, CD = CD) 
         end
         if(verbose)
           println("Step 3, AdaLASSO without Outliers: ", time_AdaS3woO)
@@ -213,7 +208,7 @@ function IFL(y, x; handle_outliers = true, force_intercept = false, CD = false, 
   end  # Time
 
   # β estimated without outliers
-  v_beta_Par = M * LdP_i * theta_hatP     # Without Intercept
+  v_beta_Par = M * LdP_i * theta_hatP     
   m_beta_Par = reshape(v_beta_Par, n, p) 
 
   # β estimated with outliers
@@ -227,50 +222,41 @@ function IFL(y, x; handle_outliers = true, force_intercept = false, CD = false, 
   end
     
   # Estimate Intercept
-  if(force_intercept)
-    β0_hat = mean_y .- mean_x   * vcat(0, m_beta_Par[end,:]) # valid only for the last intercept.
-    β0_hato = mean_y .- mean_x  * vcat(0, m_beta_Paro[end,:]) # valid only for the last intercept.
+  #if (intercept)
+  #  mean_x = hcat(1, mean_x) 
+  #end
+  #β0_hat  = mean_y .- mean_x  * m_beta_Par[end,:]  # valid only for the last intercept.
+  #β0_hato = mean_y .- mean_x  * m_beta_Paro[end,:] # valid only for the last intercept. 
+  if(intercept) # Estimated Intercept is the first colum of B = m_beta_Par
+    β0_hat = m_beta_Par[:,1]  
+    β0_hato = m_beta_Paro[:,1]  
+    m_beta_Par = m_beta_Par[:,2:end]
+    m_beta_Paro = m_beta_Paro[:,2:end]
+    p = p-1
+    v_beta_Par = reshape(m_beta_Par, n*p, 1)
+    v_beta_Paro = reshape(m_beta_Paro, n*p, 1)
   else
-    β0_hat = mean_y .- mean_x * m_beta_Par[end,:] # valid only for the last intercept.
-    β0_hato = mean_y .- mean_x * m_beta_Paro[end,:] # valid only for the last intercept.
+    β0_hat  = mean_y .- mean_x  * m_beta_Par[end,:]  # valid only for the last intercept.
+    β0_hato = mean_y .- mean_x  * m_beta_Paro[end,:] # valid only for the last intercept. 
   end
-    
+      
   # Since data was centralized, it needs to be decentralized back.
-  y_original_hat = y_hat .+ mean_y
-  
+  ydc_hat = y_hat .+ mean_y
   if(handle_outliers)
-    y_original_hat_woutl  = y_hato .+ mean_y
-  else
-    y_original_hat_woutl =  y_original_hat
+    ydc_hat_wOutl  = y_hato .+ mean_y
   end
-
-  # Last Observation Check
-  #println("Last observation (Centered) is                                :", y[end])
-  #println()
-  #println("Last observation (Centered) estimation WO Out         is      :", y_hat[end])
-  #println("Last observation (Centered) estimation WO Out recalculated is :", x[end,:]' * m_beta_Par[end,:])
-  ## It needs to take into consideration all dummy variables with Xout = HPo[end,:] #* theta_hatPo
-  #println("Last observation (Centered) estimation Wt Out         is      :", y_hato[end])
-  #println("Last observation (Centered) estimation Wt Out recalculated is :", HPo[end,:]' * theta_hatPo)
-  #println()
-  ## Check 
-  #println("Last observation (rescaled) is                                :", y_original[end])
-  #println("Last observation (rescaled) estimation WO Out         is      :", y_original_hat[end])
-  #println("Last observation (rescaled) estimation WO Out recalculated is :", β0_hat[1] + x_original[end,:]' * m_beta_Par[end,:])
-  #println("Last observation (rescaled) estimation Wt Out         is      :", y_original_hat_woutl[end])
-  #println("Last observation (rescaled) estimation Wt Out recalculated is :", β0_hato[1] + x_original[end,:]' * m_beta_Paro[end,:])
-  ## Last Observation Check
     
   # RMSE In Sample
-  RMSE_inS  = sqrt(1/length(y)*sum((y.-y_hat).^2))
-  RMSE_inSo = sqrt(1/length(y)*sum((y.-y_hato).^2))
-
+  RMSE_inS  = RMSE(y,ydc_hat) 
+  RMSE_inSo = RMSE(y, ydc_hat_wOutl) 
+  
   # Selected variables X unselected variables, and variables with break 
   chosen_variables = zeros(p)
   chosen_variables_break =  zeros(p)
   chosen_variables_outliers = zeros(p)
   chosen_variables_outliers_break =  zeros(p)
   
+  # p = number of original variables (does not consider intercept) 
   for j in 1:p
     if (abs.(sum(m_beta_Par[:,j])) > 0)
       chosen_variables[j] = 1
@@ -299,20 +285,11 @@ function IFL(y, x; handle_outliers = true, force_intercept = false, CD = false, 
       end
     end
   end
-
-  # Incorporate the intercept in the solution, if it is assumed.
-  if (force_intercept)
-    m_beta_Par = hcat(fill(mean_x[1], n),m_beta_Par) 
-    v_beta_Par = vec(m_beta_Par)
-    m_beta_Paro = hcat(fill(mean_x[1], n),m_beta_Paro) 
-    v_beta_Paro = vec(m_beta_Paro)
-  end
   
   return (β_np_1 = v_beta_Par , β_n_p = m_beta_Par,
           βo_np_1 = v_beta_Paro , βo_n_p = m_beta_Paro,
-          β0 = β0_hat, β0o = β0_hato, 
-          y_hat =  y_original_hat ,  y_hato = y_original_hat_woutl,
-          mean_x  = mean_x , mean_y  = mean_y, 
+          β0_hat = β0_hat, β0_hato = β0_hato,
+          y_hat =  ydc_hat ,  y_hato = ydc_hat_wOutl,
           bic_value = bic_value, bic_value_outliers = bic_value_outliers,            
           chosen_var = chosen_variables,
           chosen_var_bk = chosen_variables_break,

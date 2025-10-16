@@ -9,14 +9,14 @@
 using Plots
 using LinearAlgebra
 using GLMNet
+using SparseArrays
 
 #
-# MSE
+# RMSE
 #
-function MSE_xy(x, y::Vector{Float64})
-  return (1/length(x)) * sqrt(sum((x - y).^2))
+function RMSE(x1::AbstractVector, x2::AbstractVector)
+  return sqrt(mean((x1 .- x2).^2))
 end
-
 #
 # Ldk Matrix
 #
@@ -161,6 +161,40 @@ function Inverse_L(nbetas::Vector{Int64})
   end
 
   return Ldi_2
+end
+
+#
+# Build Matrix H = XX * W * Ld_i
+#
+function build_H(x::AbstractMatrix)
+  n, p = size(x)
+  H = spzeros(eltype(x), n, n*p)  # preallocate the big sparse matrix
+
+  for j in 1:p
+      # build blockM where blockM[k,i] = x[k,j] for k ≥ i, else 0
+      rows = Vector{Int}(undef, n*(n+1)÷2)
+      cols = Vector{Int}(undef, n*(n+1)÷2)
+      vals = Vector{eltype(x)}(undef, n*(n+1)÷2)
+
+      t = 1
+      for k in 1:n
+          # fill columns 1..k in row k with the same value x[k,j]
+          v = x[k,j]
+          for i in 1:k
+              rows[t] = k
+              cols[t] = i
+              vals[t] = v
+              t += 1
+          end
+      end
+
+      blockM = sparse(rows, cols, vals, n, n)
+
+      # place this block into H at columns ((j-1)*n+1) : (j*n)
+      H[:, (j-1)*n + 1 : j*n] = blockM
+  end
+
+  return H
 end
 
 #
