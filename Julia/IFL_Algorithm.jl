@@ -21,8 +21,7 @@ Since IFL considers a dynamic model, data should be standardized OUTSIDE IFL.
 CD = false # uses glmnet
 CD = true  # uses Coordinate Descent
 
-PwL = false (default) for Time Series Problems
-PwL = true for Piecewise Linear problmes
+PwL = false (default)
   
 Returns β_np_1 = v_beta_Par , β_n_p = m_beta_Par,                 # Solutions without Outliers
         βo_np_1 = v_beta_Paro , βo_n_p = m_beta_Paro,             # Solutions with Outliers
