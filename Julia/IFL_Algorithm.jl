@@ -14,12 +14,15 @@ include("supporting_functions.jl")
 # IFL
 #
 """
-IFL(y, x; handle_outliers = true, intercept = false, CD = false, verbose = false)
+IFL(y, x; handle_outliers = true, intercept = false, CD = false, verbose = false, PwL = false)
 
 Since IFL considers a dynamic model, data should be standardized OUTSIDE IFL.
 
 CD = false # uses glmnet
 CD = true  # uses Coordinate Descent
+
+PwL = false (default) for Time Series Problems
+PwL = true for Piecewise Linear problmes
   
 Returns β_np_1 = v_beta_Par , β_n_p = m_beta_Par,                 # Solutions without Outliers
         βo_np_1 = v_beta_Paro , βo_n_p = m_beta_Paro,             # Solutions with Outliers
@@ -39,9 +42,9 @@ Returns β_np_1 = v_beta_Par , β_n_p = m_beta_Par,                 # Solutions 
 Last review: 16 Oct 25
 
 """
-function IFL(y, x; handle_outliers = true, intercept = false, CD = false, verbose = false)
+function IFL(y, x; handle_outliers = true, intercept = false, CD = false, verbose = false, PwL = false)
   """
-  """ 
+  """   
   
   # Store originals
   x_original = x
@@ -63,8 +66,12 @@ function IFL(y, x; handle_outliers = true, intercept = false, CD = false, verbos
 
   ####################################################################
   # Problem Dimensions
-  n = length(y) 
-  p = size(xc)[2] # When Intercept is assumed p has already turned to p-1
+  n = length(y)
+  if (isa(xc, AbstractVector)) 
+    p = 1
+  else
+    p = size(xc)[2] # When Intercept is assumed p has already turned to p-1
+  end
   ####################################################################
   
   # Setup Iteractive Fused LASSO 
@@ -81,19 +88,27 @@ function IFL(y, x; handle_outliers = true, intercept = false, CD = false, verbos
           XX = hcat(XX, Diagonal(xc[:, i]))  # Horizontally concatenate diagonal matrices
       end
   end
-
+  
   # Main loop
   IFL_t0 = @elapsed begin 
     
-    time_H = @elapsed begin
-      Hs = build_H(xc)
-    end
+    if (PwL == false)         # Time Series
+      time_H = @elapsed begin
+        Hs = build_H(xc)
+      end
+      H = Matrix(Hs) 
+    else                      # Piecewise Linear
+      time_H = @elapsed begin
+        Hs = build_Hpwl(xc)
+        Po_1 = Pnp_matrix(xc)' # Inverse of Po = transpose of Po 
+      end
+      H = Matrix(Hs) 
+    end         
+
     if(verbose)
       println("Step 1, Build H: ", time_H)
-    end 
+    end    
     
-    H = Matrix(Hs)         
-
     # Ada LASSO solution with smallest BIC
     # Intercept is being managed outside glmnet. 
     # Since its a Dynamic Linear Regression, the intercept is time variant.
@@ -152,9 +167,13 @@ function IFL(y, x; handle_outliers = true, intercept = false, CD = false, verbos
       nbetas_In_Tot = sum(nbetas_In)
       
       global LdP_i = Inverse_L(Int.(nbetas_In))
-      # Partial solution: solve problem on new dimensions 
-      global HP = XX * M * LdP_i 
-        
+      # Partial solution: solve problem on new dimensions
+      if (PwL == true)
+        global HP = XX * Po_1 * M * LdP_i   # Piecewise Linear
+      else
+        global HP = XX * M * LdP_i          # Time Series
+      end
+
       if (handle_outliers) 
         # Handlig Outliers
         global HPo = hcat(HP, Matrix{Float64}(I, Int(n), Int(n)))
@@ -236,8 +255,13 @@ function IFL(y, x; handle_outliers = true, intercept = false, CD = false, verbos
     v_beta_Par = reshape(m_beta_Par, n*p, 1)
     v_beta_Paro = reshape(m_beta_Paro, n*p, 1)
   else
-    β0_hat  = mean_y .- mean_x  * m_beta_Par[end,:]  # valid only for the last intercept.
-    β0_hato = mean_y .- mean_x  * m_beta_Paro[end,:] # valid only for the last intercept. 
+    if (p != 1) 
+      β0_hat  = mean_y .- mean_x  * m_beta_Par[end,:]  # valid only for the last intercept.
+      β0_hato = mean_y .- mean_x  * m_beta_Paro[end,:] # valid only for the last intercept.
+    else # Univariate wo Intercept cases ".*"
+      β0_hat  = mean_y .- mean_x  .* m_beta_Par[end,:]  # valid only for the last intercept.
+      β0_hato = mean_y .- mean_x  .* m_beta_Paro[end,:] # valid only for the last intercept.
+    end 
   end
       
   # Since data was centralized, it needs to be decentralized back.

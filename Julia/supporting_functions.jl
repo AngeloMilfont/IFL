@@ -164,10 +164,15 @@ function Inverse_L(nbetas::Vector{Int64})
 end
 
 #
-# Build Matrix H = XX * W * Ld_i
+# Build Matrix H = XX * W * Ld_i for the time series Case
 #
-function build_H(x::AbstractMatrix)
-  n, p = size(x)
+function build_H(x) #::AbstractMatrix)
+  if (isa(x, AbstractVector))
+    n, p = length(x), 1
+  else
+    n, p = size(x)
+  end
+  
   H = spzeros(eltype(x), n, n*p)  # preallocate the big sparse matrix
 
   for j in 1:p
@@ -788,4 +793,56 @@ function bic_CD(x::Matrix{Float64}, y::Vector{Float64}, alpha::Number; standardi
           beta = solution.βu_sol, bick = solution.bick, parameters= parameters, lambdas = solution.λ_pth,
           itcp =solution.itcp_sol)
 	
+end
+
+###############################################################################
+# Permutations
+###############################################################################
+
+function Pnp_matrix(X)
+
+  n, p = size(X)
+  P = spzeros(Int, n*p, n*p)  
+  for i in 1:p
+      P_i = spzeros(Int, n, n)  
+      p = sortperm(X[:,i]) 
+      for j in 1:n
+          P_i[j,p[j]] = 1
+      end
+      P[(i-1)*n+1:i*n,(i-1)*n+1:i*n] = P_i
+  end
+  return P
+end
+
+#
+# Build Matrix H = XX * inv(Po) * Ld_i for the Piecewise Linear Case (Permutations)
+#
+function build_Hpwl(x) #::AbstractMatrix)
+  if (isa(x, AbstractVector))
+    n, p = length(x), 1
+  else
+    n, p = size(x)
+  end
+  
+  H = spzeros(eltype(x), n, n*p)  # preallocate the big sparse matrix
+  
+  # creates L_1 
+  rows = [j for j in 1:n for k in 1:j]
+  cols = [k for j in 1:n for k in 1:j]
+  vals = ones(Int, length(rows))
+  L_1 = sparse(rows, cols, vals, n, n)
+  
+  # Creates each block of H
+  for j in 1:p # for every feature p
+    P_i = spzeros(Int, n, n)  
+    per = sortperm(x[:,j]) 
+    for k in 1:n
+      P_i[k,per[k]] = 1
+    end
+    XD = Diagonal(x[:,j])
+    HB = XD * P_i' * L_1
+    H[:, (j-1)*n+1:j*n] = HB 
+  end
+  return H
+
 end
