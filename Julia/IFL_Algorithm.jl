@@ -14,15 +14,13 @@ include("supporting_functions.jl")
 # IFL
 #
 """
-IFL(y, x; handle_outliers = true, intercept = false, CD = false, verbose = false, PwL = false)
+IFL(y, x; handle_outliers = true, intercept = false, CD = false, verbose = false)
 
 Since IFL considers a dynamic model, data should be standardized OUTSIDE IFL.
 
 CD = false # uses glmnet
 CD = true  # uses Coordinate Descent
 
-PwL = false (default)
-  
 Returns β_np_1 = v_beta_Par , β_n_p = m_beta_Par,                 # Solutions without Outliers
         βo_np_1 = v_beta_Paro , βo_n_p = m_beta_Paro,             # Solutions with Outliers
         β0 = β0_hat, β0_hato = β0_hato,                           # Estimated Intercept
@@ -38,10 +36,10 @@ Returns β_np_1 = v_beta_Par , β_n_p = m_beta_Par,                 # Solutions 
         ind_out = ind_out,                                        # list of outlier in y  
         IFL_t0 = IFL_t0                                           # time to converge
 
-Last review: 16 Oct 25
+Last review: 12 Nov 25
 
 """
-function IFL(y, x; handle_outliers = true, intercept = false, CD = false, verbose = false, PwL = false)
+function IFL(y, x; handle_outliers = true, intercept = false, CD = false, verbose = false)
   """
   """   
   
@@ -91,19 +89,11 @@ function IFL(y, x; handle_outliers = true, intercept = false, CD = false, verbos
   # Main loop
   IFL_t0 = @elapsed begin 
     
-    if (PwL == false)         # Time Series
-      time_H = @elapsed begin
-        Hs = build_H(xc)
-      end
-      H = Matrix(Hs) 
-    else                      # Piecewise Linear
-      time_H = @elapsed begin
-        Hs = build_Hpwl(xc)
-        Po_1 = Pnp_matrix(xc)' # Inverse of Po = transpose of Po 
-      end
-      H = Matrix(Hs) 
-    end         
-
+    time_H = @elapsed begin
+      Hs = build_H(xc)
+    end
+    H = Matrix(Hs) 
+    
     if(verbose)
       println("Step 1, Build H: ", time_H)
     end    
@@ -167,12 +157,8 @@ function IFL(y, x; handle_outliers = true, intercept = false, CD = false, verbos
       
       global LdP_i = Inverse_L(Int.(nbetas_In))
       # Partial solution: solve problem on new dimensions
-      if (PwL == true)
-        global HP = XX * Po_1 * M * LdP_i   # Piecewise Linear
-      else
-        global HP = XX * M * LdP_i          # Time Series
-      end
-
+      global HP = XX * M * LdP_i          
+      
       if (handle_outliers) 
         # Handlig Outliers
         global HPo = hcat(HP, Matrix{Float64}(I, Int(n), Int(n)))
@@ -240,11 +226,6 @@ function IFL(y, x; handle_outliers = true, intercept = false, CD = false, verbos
   end
     
   # Estimate Intercept
-  #if (intercept)
-  #  mean_x = hcat(1, mean_x) 
-  #end
-  #β0_hat  = mean_y .- mean_x  * m_beta_Par[end,:]  # valid only for the last intercept.
-  #β0_hato = mean_y .- mean_x  * m_beta_Paro[end,:] # valid only for the last intercept. 
   if(intercept) # Estimated Intercept is the first colum of B = m_beta_Par
     β0_hat = m_beta_Par[:,1]  
     β0_hato = m_beta_Paro[:,1]  
